@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.SocketException;
+import java.nio.channels.SocketChannel;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -18,6 +19,7 @@ public class Connection {
     private String host;
     private int port = Protocol.DEFAULT_PORT;
     private Socket socket;
+    private SocketChannel channel;
     private Protocol protocol = new Protocol();
     private RedisOutputStream outputStream;
     private RedisInputStream inputStream;
@@ -115,11 +117,14 @@ public class Connection {
     public void connect() {
         if (!isConnected()) {
             try {
-                socket = new Socket();
-                socket.connect(new InetSocketAddress(host, port), timeout);
-                socket.setSoTimeout(timeout);
-                outputStream = new RedisOutputStream(socket.getOutputStream());
-                inputStream = new RedisInputStream(socket.getInputStream());
+            	channel = SocketChannel.open();
+            	channel.connect(new InetSocketAddress(host, port));
+            	channel.configureBlocking(false);
+                socket = channel.socket();
+                //socket.connect(new InetSocketAddress(host, port), timeout);
+                //socket.setSoTimeout(timeout);
+                outputStream = new RedisOutputStream(channel);
+                inputStream = new RedisInputStream(channel);
             } catch (IOException ex) {
                 throw new JedisConnectionException(ex);
             }
@@ -131,8 +136,8 @@ public class Connection {
             try {
                 inputStream.close();
                 outputStream.close();
-                if (!socket.isClosed()) {
-                    socket.close();
+                if (channel.isOpen()) {
+                    channel.close();
                 }
             } catch (IOException ex) {
                 throw new JedisConnectionException(ex);

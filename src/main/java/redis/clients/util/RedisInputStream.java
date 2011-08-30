@@ -16,37 +16,50 @@
 
 package redis.clients.util;
 
-import java.io.FilterInputStream;
 import java.io.IOException;
-import java.io.InputStream;
+import java.nio.ByteBuffer;
+import java.nio.channels.SelectionKey;
+import java.nio.channels.Selector;
+import java.nio.channels.SocketChannel;
+import java.util.Iterator;
 
 import redis.clients.jedis.exceptions.JedisConnectionException;
 import redis.clients.jedis.exceptions.JedisException;
 
-public class RedisInputStream extends FilterInputStream {
-
-    protected final byte buf[];
+public class RedisInputStream {
+	protected SocketChannel channel;
+	protected Selector selector;
+	protected SelectionKey acceptKey;
+	
+    protected final ByteBuffer buffer;
 
     protected int count, limit;
-
-    public RedisInputStream(InputStream in, int size) {
-        super(in);
+    
+    public RedisInputStream(SocketChannel channel, int size) throws IOException {
         if (size <= 0) {
             throw new IllegalArgumentException("Buffer size <= 0");
         }
-        buf = new byte[size];
+        buffer = ByteBuffer.allocateDirect(size);
+        buffer.limit(0);
+        this.channel = channel;
+        selector = Selector.open();
+        acceptKey = channel.register( selector,SelectionKey.OP_READ);
     }
 
-    public RedisInputStream(InputStream in) {
-        this(in, 8192);
+    public RedisInputStream(SocketChannel channel) throws IOException {
+        this(channel, 8192);
+    }
+    
+    public void close() throws IOException {
+    	selector.close();
     }
 
     public byte readByte() throws IOException {
-        if (count == limit) {
+        if (buffer.remaining() == 0) {
             fill();
         }
 
-        return buf[count++];
+        return buffer.get();
     }
 
     public String readLine() {
@@ -56,15 +69,15 @@ public class RedisInputStream extends FilterInputStream {
 
         try {
             while (true) {
-                if (count == limit) {
+                if (buffer.remaining() == 0) {
                     fill();
                 }
                 if (limit == -1)
                     break;
 
-                b = buf[count++];
+                b = buffer.get();
                 if (b == '\r') {
-                    if (count == limit) {
+                    if (buffer.remaining() == 0) {
                         fill();
                     }
 
@@ -73,7 +86,7 @@ public class RedisInputStream extends FilterInputStream {
                         break;
                     }
 
-                    c = buf[count++];
+                    c = buffer.get();
                     if (c == '\n') {
                         break;
                     }
@@ -95,19 +108,35 @@ public class RedisInputStream extends FilterInputStream {
     }
 
     public int read(byte[] b, int off, int len) throws IOException {
-        if (count == limit) {
+        if (buffer.remaining() == 0) {
             fill();
             if (limit == -1)
                 return -1;
         }
-        final int length = Math.min(limit - count, len);
-        System.arraycopy(buf, count, b, off, length);
-        count += length;
+        final int length = Math.min(buffer.remaining(), len);
+        buffer.get(b, 0, length);
         return length;
     }
 
     private void fill() throws IOException {
-        limit = in.read(buf);
-        count = 0;
+    	buffer.clear();
+    	selector.select();
+    	Iterator<SelectionKey> selectedKeys = selector.selectedKeys().iterator();
+    	while (selectedKeys.hasNext()) {
+            SelectionKey key = (SelectionKey) selectedKeys.next();
+            selectedKeys.remove();
+
+            if (!key.isValid()) {
+            	continue;
+            }
+
+            if (key.isReadable()) {
+    	        limit = channel.read(buffer);
+    	        //System.out.println(lastLimit);
+            }
+        }
+    	//System.out.print(limit);
+    	//System.out.println(" bytes went through");
+    	buffer.flip();
     }
 }
